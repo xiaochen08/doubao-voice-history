@@ -71,6 +71,22 @@ public static class DvhText
 }
 "@
 
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class DvhInject
+{
+    [DllImport("kernel32", SetLastError=true)] public static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32", SetLastError=true)] public static extern IntPtr VirtualAllocEx(IntPtr h, IntPtr addr, uint size, uint alloc, uint prot);
+    [DllImport("kernel32", SetLastError=true)] public static extern bool WriteProcessMemory(IntPtr h, IntPtr addr, byte[] buf, uint size, out UIntPtr written);
+    [DllImport("kernel32", SetLastError=true)] public static extern IntPtr CreateRemoteThread(IntPtr h, IntPtr attr, uint stack, IntPtr start, IntPtr param, uint flags, IntPtr tid);
+    [DllImport("kernel32", SetLastError=true)] public static extern IntPtr GetProcAddress(IntPtr h, string name);
+    [DllImport("kernel32", SetLastError=true)] public static extern IntPtr GetModuleHandle(string name);
+    [DllImport("kernel32", SetLastError=true)] public static extern uint WaitForSingleObject(IntPtr h, uint ms);
+    [DllImport("kernel32", SetLastError=true)] public static extern bool CloseHandle(IntPtr h);
+}
+"@
+
 $dataDir = Join-Path $env:APPDATA 'DoubaoVoiceHistory'
 $historyFile = Join-Path $dataDir 'history.json'
 $logFile = Join-Path $dataDir 'app.log'
@@ -216,6 +232,44 @@ function Copy-FocusedTextViaClipboard
     try { [System.Windows.Forms.SendKeys]::SendWait('{END}') } catch { }
     try { if ($null -ne $oldClipboard) { [System.Windows.Forms.Clipboard]::SetText($oldClipboard) } } catch { }
     return $text
+}
+
+$script:injectedPids = @{}
+
+function Inject-VoiceHook([int]$targetPid)
+{
+    if ($targetPid -le 0) { return }
+    if ($script:injectedPids.ContainsKey($targetPid)) { return }
+    $hook = Join-Path (Split-Path $PSCommandPath -Parent) 'voicehook.dll'
+    if (-not (Test-Path -LiteralPath $hook)) {
+        Write-Log 'inject skipped: voicehook.dll missing'
+        return
+    }
+    $handle = [DvhInject]::OpenProcess(0x1F0FFF, $false, $targetPid)
+    if ($handle -eq [IntPtr]::Zero) {
+        Write-Log ("inject open failed pid={0} err={1}" -f $targetPid, [Runtime.InteropServices.Marshal]::GetLastWin32Error())
+        return
+    }
+    try {
+        $bytes = [Text.Encoding]::Unicode.GetBytes($hook + "`0")
+        $remote = [DvhInject]::VirtualAllocEx($handle, [IntPtr]::Zero, [uint32]$bytes.Length, 0x1000, 0x04)
+        if ($remote -eq [IntPtr]::Zero) { throw 'VirtualAllocEx failed' }
+        $written = [UIntPtr]::Zero
+        if (-not [DvhInject]::WriteProcessMemory($handle, $remote, $bytes, [uint32]$bytes.Length, [ref]$written)) { throw 'WriteProcessMemory failed' }
+        $load = [DvhInject]::GetProcAddress([DvhInject]::GetModuleHandle('kernel32.dll'), 'LoadLibraryW')
+        $thread = [DvhInject]::CreateRemoteThread($handle, [IntPtr]::Zero, 0, $load, $remote, 0, [IntPtr]::Zero)
+        if ($thread -eq [IntPtr]::Zero) { throw 'CreateRemoteThread failed' }
+        [DvhInject]::WaitForSingleObject($thread, 5000) | Out-Null
+        [DvhInject]::CloseHandle($thread) | Out-Null
+        $script:injectedPids[$targetPid] = $true
+        Write-Log ("inject ok pid={0}" -f $targetPid)
+    }
+    catch {
+        Write-Log ("inject failed pid={0}: {1}" -f $targetPid, $_.Exception.Message)
+    }
+    finally {
+        [DvhInject]::CloseHandle($handle) | Out-Null
+    }
 }
 
 function Read-VoiceTap
@@ -1202,6 +1256,19 @@ $script:pollTimer.Add_Tick({
         $script:tapReadAt = Get-Date
         Read-VoiceTap
     }
+    if (((Get-Date) - $script:targetCheckAt).TotalMilliseconds -ge 1000) {
+        $script:targetCheckAt = Get-Date
+        try {
+            $foreground = [DvhNative]::GetForegroundWindow()
+            $foregroundPid = 0
+            [DvhNative]::GetWindowThreadProcessId($foreground, [ref]$foregroundPid) | Out-Null
+            $process = [System.Diagnostics.Process]::GetProcessById($foregroundPid)
+            if ($process -and $process.ProcessName -notmatch 'ImeService|ImeWatchdog|powershell|pwsh') {
+                $script:lastTargetPid = $foregroundPid
+                $script:lastTargetName = $process.ProcessName
+            }
+        } catch { }
+    }
     $hwnd = [DvhNative]::FindWindow('OimeVoiceWaveWindow', $null)
     $visible = ($hwnd -ne [IntPtr]::Zero) -and [DvhNative]::IsWindowVisible($hwnd)
     if ($visible -and -not $script:voiceVisible)
@@ -1238,6 +1305,10 @@ $script:pollTimer.Add_Tick({
                 Write-Log ("clipboard fallback before_len={0}" -f $(if ($null -eq $script:clipboardBefore) { -1 } else { $script:clipboardBefore.Length }))
             }
             Write-Log ("voice start; before_len={0}" -f $(if ($null -eq $script:beforeText) { -1 } else { $script:beforeText.Length }))
+            if ($script:lastTargetPid -gt 0) {
+                Write-Log ("target pid={0} name={1}" -f $script:lastTargetPid, $script:lastTargetName)
+                Inject-VoiceHook $script:lastTargetPid
+            }
         }
         catch { $script:focusElement = $null; $script:beforeText = $null }
     }
@@ -1323,6 +1394,9 @@ $script:clipboardMode = $false
 $script:clipboardBefore = $null
 $script:tapOffset = 0
 $script:tapReadAt = [datetime]::MinValue
+$script:lastTargetPid = 0
+$script:lastTargetName = ''
+$script:targetCheckAt = [datetime]::MinValue
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = New-MicIcon

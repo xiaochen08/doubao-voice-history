@@ -62,6 +62,7 @@ if ([System.IO.Path]::GetFullPath($sourceDir) -ne [System.IO.Path]::GetFullPath(
     Copy-Item -LiteralPath (Join-Path $sourceDir 'Update.ps1') -Destination (Join-Path $appDir 'Update.ps1') -Force -ErrorAction SilentlyContinue
     Copy-Item -LiteralPath (Join-Path $sourceDir 'update.json') -Destination (Join-Path $appDir 'update.json') -Force -ErrorAction SilentlyContinue
     Copy-Item -LiteralPath (Join-Path $sourceDir 'VERSION.json') -Destination (Join-Path $appDir 'VERSION.json') -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath (Join-Path $sourceDir 'voicehook.dll') -Destination (Join-Path $appDir 'voicehook.dll') -Force -ErrorAction SilentlyContinue
 } else {
     Ok '程序文件已由安装包放置'
 }

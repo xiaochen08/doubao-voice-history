@@ -1,5 +1,5 @@
 #define MyAppName "豆包语音历史"
-#define MyAppVersion "2.3.1"
+#define MyAppVersion "2.4.0"
 #define MyAppPublisher "xiaochen08"
 #define MyAppURL "https://github.com/xiaochen08/doubao-voice-history"
 
@@ -36,6 +36,7 @@ Source: "Patch-Ime.ps1"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoes
 Source: "Install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "VERSION.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "update.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "voicehook.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "安装说明.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "Stop-App.ps1"; Flags: dontcopy
