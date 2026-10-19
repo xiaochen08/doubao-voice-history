@@ -116,6 +116,19 @@ try {
     Warn "版本监控任务创建失败：$($_.Exception.Message)"
 }
 
+$settingsFile = Join-Path $dataDir 'settings.json'
+if (-not (Test-Path $settingsFile)) {
+    @{ autoUpdate = $true } | ConvertTo-Json | Set-Content -LiteralPath $settingsFile -Encoding UTF8
+}
+try {
+    $updateScript = Join-Path $appDir 'Update.ps1'
+    $updateCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$updateScript`" -Auto"
+    & schtasks.exe /Create /SC HOURLY /MO 6 /TN "DoubaoVoiceHistory-AutoUpdate" /TR $updateCmd /F | Out-Null
+    Ok '自动更新任务已创建（每 6 小时检查 GitHub Release）'
+} catch {
+    Warn "自动更新任务创建失败：$($_.Exception.Message)"
+}
+
 Step '创建桌面与开始菜单快捷方式'
 $shell = New-Object -ComObject WScript.Shell
 foreach ($lnk in @($desktopLnk, $startMenuLnk)) {

@@ -110,6 +110,26 @@ if (Test-Path $logFile) {
     }
 } else { Warn 'app.log 不存在' }
 
+Head '自动更新'
+$autoTask = Get-ScheduledTask -TaskName 'DoubaoVoiceHistory-AutoUpdate' -ErrorAction SilentlyContinue
+if ($autoTask) {
+    Pass ("自动更新任务存在，状态：{0}" -f $autoTask.State)
+} else {
+    Warn '自动更新任务不存在'
+    if ($Fix) {
+        $updater = Join-Path $appDir 'Update.ps1'
+        $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$updater`" -Auto"
+        & schtasks.exe /Create /SC HOURLY /MO 6 /TN "DoubaoVoiceHistory-AutoUpdate" /TR $cmd /F | Out-Null
+        Pass '已重建自动更新任务'
+    }
+}
+$updateLog = Join-Path $dataDir 'update.log'
+if (Test-Path $updateLog) {
+    $recent = Select-String -LiteralPath $updateLog -Pattern 'ERROR' -ErrorAction SilentlyContinue | Select-Object -Last 3
+    if ($recent) { Warn '最近更新错误：'; foreach ($r in $recent) { Add-Line ("         " + $r.Line) } }
+    else { Pass 'update.log 无 ERROR' }
+} else { Warn 'update.log 不存在（尚未执行过更新）' }
+
 Head '豆包输入法'
 $tip = 'HKLM:\SOFTWARE\Microsoft\CTF\TIP\{9D2B2E2B-3C93-4D2F-9D35-6EEB85F0D2B0}'
 if (Test-Path $tip) { Pass 'TSF 注册存在' } else { Fail '未检测到豆包 TSF 注册' }
