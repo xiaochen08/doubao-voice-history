@@ -638,6 +638,7 @@ $historyXaml = @'
             </StackPanel>
           </StackPanel>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+            <Button x:Name="CheckUpdateButton" Content="检查更新" Style="{StaticResource LinkButton}" Margin="0,0,10,0"/>
             <Button x:Name="OpenDirButton" Content="打开目录" Style="{StaticResource LinkButton}" Margin="0,0,10,0"/>
             <Button x:Name="MinButton" Content="—" Style="{StaticResource LinkButton}" FontSize="13" Margin="0,0,2,0"/>
             <Button x:Name="CloseHistoryButton" Content="✕" Style="{StaticResource LinkButton}" FontSize="11"/>
@@ -746,6 +747,7 @@ $emptySubtitle = $historyWindow.FindName('EmptySubtitle')
 $clearButton = $historyWindow.FindName('ClearButton')
 $deleteButton = $historyWindow.FindName('DeleteButton')
 $openDirButton = $historyWindow.FindName('OpenDirButton')
+$checkUpdateButton = $historyWindow.FindName('CheckUpdateButton')
 $minButton = $historyWindow.FindName('MinButton')
 $closeHistoryButton = $historyWindow.FindName('CloseHistoryButton')
 $autoStartCheck = $historyWindow.FindName('AutoStartCheck')
@@ -1057,6 +1059,71 @@ function Set-AutoUpdateSetting([bool]$enabled)
     catch { }
 }
 
+$script:updateJob = $null
+
+function Start-UpdateCheck
+{
+    if ($null -ne $script:updateJob -and $script:updateJob.State -eq 'Running') { return }
+    $checkUpdateButton.IsEnabled = $false
+    $checkUpdateButton.Content = '检查中…'
+    $historyStatus.Text = '正在检查 GitHub 最新版本…'
+    $script:updateJob = Start-Job -ScriptBlock {
+        param($appDir)
+        $config = Get-Content (Join-Path $appDir 'update.json') -Raw | ConvertFrom-Json
+        $local = (Get-Content (Join-Path $appDir 'VERSION.json') -Raw | ConvertFrom-Json).version
+        $headers = @{ 'User-Agent' = 'DoubaoVoiceHistory'; 'Accept' = 'application/vnd.github+json' }
+        $token = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN', 'User')
+        if ($token) { $headers['Authorization'] = "Bearer $token" }
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$($config.repo)/releases/latest" -Headers $headers
+        [pscustomobject]@{
+            Current = $local
+            Latest = ($release.tag_name -replace '^v','')
+            Url = $release.html_url
+            Body = $release.body
+        }
+    } -ArgumentList (Split-Path $PSCommandPath -Parent)
+}
+
+$script:updateTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:updateTimer.Interval = [TimeSpan]::FromMilliseconds(350)
+$script:updateTimer.Add_Tick({
+    if ($null -eq $script:updateJob) { return }
+    if ($script:updateJob.State -eq 'Running') { return }
+    $result = @(Receive-Job $script:updateJob -ErrorAction SilentlyContinue)
+    Remove-Job $script:updateJob -Force -ErrorAction SilentlyContinue
+    $script:updateJob = $null
+    $checkUpdateButton.IsEnabled = $true
+    $checkUpdateButton.Content = '检查更新'
+    if ($result.Count -eq 0) {
+        $historyStatus.Text = '检查失败，请查看 update.log'
+        return
+    }
+    $release = $result[-1]
+    if ([version]$release.Latest -le [version]$release.Current) {
+        $historyStatus.Text = "已是最新版本 $($release.Current)"
+        return
+    }
+    $answer = [System.Windows.MessageBox]::Show(
+        "发现新版本 $($release.Latest)（当前 $($release.Current)）`n`n是否下载并覆盖安装？",
+        '检查更新',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Question)
+    if ($answer -ne [System.Windows.MessageBoxResult]::Yes) {
+        $historyStatus.Text = '已取消更新'
+        return
+    }
+    $updater = Join-Path (Split-Path $PSCommandPath -Parent) 'Update.ps1'
+    Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',$updater,'-Install' -WindowStyle Hidden
+    $historyStatus.Text = '正在下载并安装，程序即将重启…'
+    $script:shutdownTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $script:shutdownTimer.Interval = [TimeSpan]::FromSeconds(1)
+    $script:shutdownTimer.Add_Tick({
+        $script:shutdownTimer.Stop()
+        $app.Shutdown()
+    })
+    $script:shutdownTimer.Start()
+})
+
 $script:copyTimer = New-Object System.Windows.Threading.DispatcherTimer
 $script:copyTimer.Interval = [TimeSpan]::FromSeconds(1.6)
 $script:copyTimer.Add_Tick({
@@ -1087,6 +1154,7 @@ $script:hideTimer.Add_Tick({ Hide-Overlay })
 
 $searchBox.Add_TextChanged({ Refresh-HistoryView })
 $searchClearButton.Add_Click({ $searchBox.Text = ''; $searchBox.Focus() | Out-Null })
+$checkUpdateButton.Add_Click({ Start-UpdateCheck })
 $historyList.Add_SelectionChanged({ $deleteButton.IsEnabled = ($historyList.SelectedIndex -ge 0) })
 $historyList.Add_PreviewMouseLeftButtonUp({ if ($historyList.SelectedIndex -ge 0) { Copy-SelectedHistory } })
 
@@ -1278,16 +1346,15 @@ $menuDoctor.Add_Click({
     }
 })
 $menuUpdate.Add_Click({
-    $updater = Join-Path (Split-Path $PSCommandPath -Parent) 'Update.ps1'
-    if (Test-Path $updater) {
-        Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',$updater
-    }
+    Show-History
+    Start-UpdateCheck
 })
 $menuExit.Add_Click({ $tray.Visible = $false; $app.Shutdown() })
 $tray.Add_DoubleClick({ Show-History })
 
 Write-Log 'app start'
 $script:pollTimer.Start()
+$script:updateTimer.Start()
 
 if ($Test)
 {
