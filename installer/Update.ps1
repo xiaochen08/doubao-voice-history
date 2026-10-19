@@ -33,6 +33,7 @@ try {
     }
     $localVersion = (Get-Content $versionPath -Raw | ConvertFrom-Json).version
     $headers = @{ 'User-Agent' = 'DoubaoVoiceHistory-Updater'; 'Accept' = 'application/vnd.github+json' }
+    if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers $headers
     $tag = ($release.tag_name -replace '^v','') -replace '-.*$',''
     if ([version]$tag -le [version]$localVersion) {
