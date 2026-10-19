@@ -7,6 +7,7 @@ This is a standalone companion app. It does not modify the Doubao IME UI.
 - Reads it again after the session ends and diffs out the inserted text.
 - Shows a floating card above the voice bar: click the text or 复制 to copy.
 - Keeps the last 500 sessions in `%APPDATA%\DoubaoVoiceHistory\history.json`.
+- Merges identical recognition results captured within 10 minutes and shows a `×N` repeat count.
 - Tray icon: 历史记录 / 退出.
 
 Run:

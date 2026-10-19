@@ -307,6 +307,14 @@ function Read-VoiceTap
                 $text = $matches[1].Trim()
                 if (Test-VoiceText $text)
                 {
+                    $tapNow = Get-Date
+                    if ($text -eq $script:lastTapText -and ($tapNow - $script:lastTapAt).TotalSeconds -lt 3)
+                    {
+                        Write-Log 'voice tap duplicate suppressed'
+                        continue
+                    }
+                    $script:lastTapText = $text
+                    $script:lastTapAt = $tapNow
                     $script:tapText = $text
                     Add-HistoryEntry $text | Out-Null
                     Show-Overlay $text
@@ -319,6 +327,67 @@ function Read-VoiceTap
     catch { }
 }
 
+function Merge-HistoryItems($items)
+{
+    $mergeWindowMinutes = 10
+    $parsedItems = @($items | ForEach-Object {
+        $text = ([string]$_.text).Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { return }
+        $parsedTime = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact(
+            ([string]$_.time).Trim(),
+            'yyyy-MM-dd HH:mm:ss',
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None,
+            [ref]$parsedTime)) { return }
+        $itemCount = 1
+        if ($null -ne $_.count) {
+            $parsedCount = 0
+            if ([int]::TryParse([string]$_.count, [ref]$parsedCount) -and $parsedCount -gt 0) {
+                $itemCount = $parsedCount
+            }
+        }
+        [pscustomobject]@{
+            time = $parsedTime.ToString('yyyy-MM-dd HH:mm:ss')
+            text = $text
+            count = $itemCount
+            _parsed = $parsedTime
+        }
+    })
+
+    $merged = New-Object System.Collections.ArrayList
+    foreach ($item in @($parsedItems | Sort-Object _parsed))
+    {
+        $existing = $null
+        for ($i = $merged.Count - 1; $i -ge 0; $i--)
+        {
+            $candidate = $merged[$i]
+            if ($candidate.text -eq $item.text -and
+                [math]::Abs(($item._parsed - $candidate._parsed).TotalMinutes) -le $mergeWindowMinutes)
+            {
+                $existing = $candidate
+                break
+            }
+        }
+        if ($null -ne $existing)
+        {
+            $existing.time = $item.time
+            $existing._parsed = $item._parsed
+            $existing.count += $item.count
+        }
+        else
+        {
+            [void]$merged.Add($item)
+        }
+    }
+
+    return @($merged |
+        Sort-Object _parsed -Descending |
+        ForEach-Object {
+            [pscustomobject]@{ time = $_.time; text = $_.text; count = [int]$_.count }
+        })
+}
+
 function Load-History
 {
     $script:history = @()
@@ -327,10 +396,24 @@ function Load-History
     {
         $raw = Get-Content -LiteralPath $historyFile -Raw
         if ([string]::IsNullOrWhiteSpace($raw)) { return }
-        $loaded = $raw | ConvertFrom-Json
-        $script:history = @($loaded |
+        $loaded = @($raw | ConvertFrom-Json)
+        if ($loaded.Count -eq 1 -and $loaded[0] -is [array]) {
+            $loaded = @($loaded[0])
+        }
+        $normalized = @($loaded |
             Where-Object { $null -ne $_ -and $_.text -and $_.time } |
-            ForEach-Object { [pscustomobject]@{ time = [string]$_.time; text = [string]$_.text } })
+            ForEach-Object {
+                [pscustomobject]@{
+                    time = [string]$_.time
+                    text = [string]$_.text
+                    count = $(if ($null -eq $_.count) { 1 } else { $_.count })
+                }
+            })
+        $script:history = @(Merge-HistoryItems $normalized | Select-Object -First 500)
+        if ($normalized.Count -ne $script:history.Count) {
+            Write-Log ("history migrated: {0} -> {1}" -f $normalized.Count, $script:history.Count)
+        }
+        Save-History
     }
     catch { Write-Log "history load failed: $($_.Exception.Message)" }
 }
@@ -348,8 +431,45 @@ function Save-History
 function Add-HistoryEntry([string]$text)
 {
     if ([string]::IsNullOrWhiteSpace($text)) { return $null }
-    $entry = [pscustomobject]@{ time = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); text = $text.Trim() }
-    $script:history = @($entry) + $script:history
+    $cleanText = $text.Trim()
+    $now = Get-Date
+    $match = $null
+    $matchTime = [datetime]::MinValue
+    foreach ($entry in $script:history)
+    {
+        if (([string]$entry.text).Trim() -ne $cleanText) { continue }
+        $entryTime = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact(
+            ([string]$entry.time).Trim(),
+            'yyyy-MM-dd HH:mm:ss',
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None,
+            [ref]$entryTime)) { continue }
+        if (($now - $entryTime).TotalMinutes -le 10)
+        {
+            $match = $entry
+            $matchTime = $entryTime
+            break
+        }
+    }
+
+    if ($null -ne $match)
+    {
+        $entryCount = 1
+        $parsedCount = 0
+        if ([int]::TryParse([string]$match.count, [ref]$parsedCount) -and $parsedCount -gt 0) {
+            $entryCount = $parsedCount
+        }
+        if (($now - $matchTime).TotalSeconds -gt 2) { $entryCount++ }
+        $match.count = $entryCount
+        $match.time = $now.ToString('yyyy-MM-dd HH:mm:ss')
+        $script:history = @($match) + @($script:history | Where-Object { -not [object]::ReferenceEquals($_, $match) })
+        Save-History
+        return $match
+    }
+
+    $entry = [pscustomobject]@{ time = $now.ToString('yyyy-MM-dd HH:mm:ss'); text = $cleanText; count = 1 }
+    $script:history = @($entry) + @($script:history)
     if ($script:history.Count -gt 500) { $script:history = $script:history[0..499] }
     Save-History
     return $entry
@@ -655,8 +775,15 @@ $historyXaml = @'
               <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
             <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,5">
-              <TextBlock Text="{Binding Time}" FontFamily="Georgia" FontSize="10.5"
-                         Foreground="#B3AB9D" VerticalAlignment="Center"/>
+              <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
+                <TextBlock Text="{Binding Time}" FontFamily="Georgia" FontSize="10.5"
+                           Foreground="#B3AB9D" VerticalAlignment="Center"/>
+                <Border x:Name="RepeatBadge" Background="#1FC9A86A" BorderBrush="#55C9A86A"
+                        BorderThickness="1" CornerRadius="8" Padding="7,1,7,2" Margin="9,0,0,0">
+                  <TextBlock Text="{Binding Repeat}" FontFamily="Georgia" FontSize="10"
+                             Foreground="#E7CF9C" VerticalAlignment="Center"/>
+                </Border>
+              </StackPanel>
               <Button x:Name="ItemCopy" Content="复制" DockPanel.Dock="Right" Visibility="Collapsed"
                       Style="{StaticResource LinkButton}" Foreground="#D9BC82" Padding="6,2" FontSize="11"/>
             </DockPanel>
@@ -666,6 +793,9 @@ $historyXaml = @'
         </Grid>
       </Border>
       <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding Repeat}" Value="">
+          <Setter TargetName="RepeatBadge" Property="Visibility" Value="Collapsed"/>
+        </DataTrigger>
         <Trigger SourceName="ItemRoot" Property="IsMouseOver" Value="True">
           <Setter TargetName="ItemRoot" Property="Background" Value="#12FFFFFF"/>
           <Setter TargetName="AccentRule" Property="Visibility" Value="Visible"/>
@@ -982,10 +1112,30 @@ function Refresh-HistoryView
         $items = @($items | Where-Object { $_.text -like "*$query*" })
     }
     $script:historyView = $items
+    $totalOccurrences = 0
+    foreach ($entry in $script:history) {
+        $parsedTotal = 0
+        if ([int]::TryParse([string]$entry.count, [ref]$parsedTotal) -and $parsedTotal -gt 0) {
+            $totalOccurrences += $parsedTotal
+        } else {
+            $totalOccurrences++
+        }
+    }
     $historyList.ItemsSource = @($items | ForEach-Object {
-        [pscustomobject]@{ Time = (Format-HistoryTime $_.time); Text = $_.text; Raw = $_.text; TimeRaw = $_.time }
+        $itemCount = 1
+        $parsedCount = 0
+        if ([int]::TryParse([string]$_.count, [ref]$parsedCount) -and $parsedCount -gt 0) {
+            $itemCount = $parsedCount
+        }
+        [pscustomobject]@{
+            Time = (Format-HistoryTime $_.time)
+            Repeat = $(if ($itemCount -gt 1) { "×$itemCount" } else { '' })
+            Text = $_.text
+            Raw = $_.text
+            TimeRaw = $_.time
+        }
     })
-    $countText.Text = '{0} 条记录 · 本地保存' -f $script:history.Count
+    $countText.Text = '{0} 条记录 · 共 {1} 次识别 · 本地保存' -f $script:history.Count, $totalOccurrences
     $searchHint.Visibility = if ([string]::IsNullOrEmpty($searchBox.Text)) { 'Visible' } else { 'Collapsed' }
     $searchClearButton.Visibility = if ([string]::IsNullOrEmpty($searchBox.Text)) { 'Collapsed' } else { 'Visible' }
     $emptyPanel.Visibility = if ($items.Count -eq 0) { 'Visible' } else { 'Collapsed' }
@@ -1312,6 +1462,8 @@ $script:pollTimer.Add_Tick({
             $script:clipboardMode = $false
             $script:clipboardBefore = $null
             $script:tapText = ''
+            $script:lastTapText = ''
+            $script:lastTapAt = [datetime]::MinValue
             if ($null -eq $script:beforeText -and $className.ToString() -match 'mmui::MainWindow') {
                 $script:clipboardMode = $true
                 $script:clipboardBefore = Copy-FocusedTextViaClipboard
@@ -1415,6 +1567,8 @@ $script:clipboardMode = $false
 $script:clipboardBefore = $null
 $script:tapOffset = 0
 $script:tapText = ''
+$script:lastTapText = ''
+$script:lastTapAt = [datetime]::MinValue
 $script:tapReadAt = [datetime]::MinValue
 $script:lastTargetPid = 0
 $script:lastTargetName = ''
@@ -1456,9 +1610,9 @@ if ($Test)
 {
     $now = Get-Date
     $script:history = @(
-        [pscustomobject]@{ time = $now.AddMinutes(-2).ToString('yyyy-MM-dd HH:mm:ss'); text = '这是一条测试识别结果：今天下午三点开会，记得带上项目进度表和预算表。' },
-        [pscustomobject]@{ time = $now.AddHours(-2).ToString('yyyy-MM-dd HH:mm:ss'); text = '把刚才那份报价单发给王工，顺便确认一下下周一能不能到场。' },
-        [pscustomobject]@{ time = $now.AddDays(-1).ToString('yyyy-MM-dd HH:mm:ss'); text = '晚上七点之前把周报补完，重点写清楚这周的性能优化和遗留问题。' }
+        [pscustomobject]@{ time = $now.AddMinutes(-2).ToString('yyyy-MM-dd HH:mm:ss'); text = '这是一条测试识别结果：今天下午三点开会，记得带上项目进度表和预算表。'; count = 2 },
+        [pscustomobject]@{ time = $now.AddHours(-2).ToString('yyyy-MM-dd HH:mm:ss'); text = '把刚才那份报价单发给王工，顺便确认一下下周一能不能到场。'; count = 1 },
+        [pscustomobject]@{ time = $now.AddDays(-1).ToString('yyyy-MM-dd HH:mm:ss'); text = '晚上七点之前把周报补完，重点写清楚这周的性能优化和遗留问题。'; count = 1 }
     )
     $startTimer = New-Object System.Windows.Threading.DispatcherTimer
     $startTimer.Interval = [TimeSpan]::FromMilliseconds(700)
