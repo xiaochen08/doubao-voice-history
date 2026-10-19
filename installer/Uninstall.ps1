@@ -1,5 +1,6 @@
 ﻿param(
-    [switch]$RemoveData
+    [switch]$RemoveData,
+    [switch]$KeepApp
 )
 
 $ErrorActionPreference = 'Continue'
@@ -28,7 +29,7 @@ Remove-Item -LiteralPath $startMenuDir -Recurse -Force -ErrorAction SilentlyCont
 
 $resolved = [System.IO.Path]::GetFullPath($appDir)
 $expectedRoot = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'DoubaoVoiceHistory'))
-if ($resolved.StartsWith($expectedRoot, [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path $resolved)) {
+if (-not $KeepApp -and $resolved.StartsWith($expectedRoot, [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path $resolved)) {
     Write-Host "移除程序目录：$resolved" -ForegroundColor Cyan
     Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -53,14 +53,18 @@ New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 Ok $appDir
 
 Step '复制程序文件'
-Copy-Item -LiteralPath (Join-Path $sourceDir 'VoiceHistory.ps1') -Destination $appScript -Force
-Copy-Item -LiteralPath (Join-Path $sourceDir 'Doctor.ps1') -Destination $doctorScript -Force
-Copy-Item -LiteralPath (Join-Path $sourceDir 'Patch-Ime.ps1') -Destination (Join-Path $appDir 'Patch-Ime.ps1') -Force -ErrorAction SilentlyContinue
-Copy-Item -LiteralPath (Join-Path $sourceDir 'Uninstall.ps1') -Destination (Join-Path $appDir 'Uninstall.ps1') -Force -ErrorAction SilentlyContinue
-Copy-Item -LiteralPath (Join-Path $sourceDir 'VersionWatch.ps1') -Destination (Join-Path $appDir 'VersionWatch.ps1') -Force -ErrorAction SilentlyContinue
-Copy-Item -LiteralPath (Join-Path $sourceDir 'Update.ps1') -Destination (Join-Path $appDir 'Update.ps1') -Force -ErrorAction SilentlyContinue
-Copy-Item -LiteralPath (Join-Path $sourceDir 'update.json') -Destination (Join-Path $appDir 'update.json') -Force -ErrorAction SilentlyContinue
-Copy-Item -LiteralPath (Join-Path $sourceDir 'VERSION.json') -Destination (Join-Path $appDir 'VERSION.json') -Force -ErrorAction SilentlyContinue
+if ([System.IO.Path]::GetFullPath($sourceDir) -ne [System.IO.Path]::GetFullPath($appDir)) {
+    Copy-Item -LiteralPath (Join-Path $sourceDir 'VoiceHistory.ps1') -Destination $appScript -Force
+    Copy-Item -LiteralPath (Join-Path $sourceDir 'Doctor.ps1') -Destination $doctorScript -Force
+    Copy-Item -LiteralPath (Join-Path $sourceDir 'Patch-Ime.ps1') -Destination (Join-Path $appDir 'Patch-Ime.ps1') -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath (Join-Path $sourceDir 'Uninstall.ps1') -Destination (Join-Path $appDir 'Uninstall.ps1') -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath (Join-Path $sourceDir 'VersionWatch.ps1') -Destination (Join-Path $appDir 'VersionWatch.ps1') -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath (Join-Path $sourceDir 'Update.ps1') -Destination (Join-Path $appDir 'Update.ps1') -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath (Join-Path $sourceDir 'update.json') -Destination (Join-Path $appDir 'update.json') -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath (Join-Path $sourceDir 'VERSION.json') -Destination (Join-Path $appDir 'VERSION.json') -Force -ErrorAction SilentlyContinue
+} else {
+    Ok '程序文件已由安装包放置'
+}
 if (-not (Test-Path $appScript)) { Fail 'VoiceHistory.ps1 复制失败'; exit 1 }
 Ok 'VoiceHistory.ps1 / Doctor.ps1'
 
