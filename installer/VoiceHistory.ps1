@@ -10,6 +10,7 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 
 Add-Type @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public static class DvhNative
 {
@@ -21,8 +22,29 @@ public static class DvhNative
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("gdi32.dll")]
     public static extern bool DeleteObject(IntPtr hObject);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll")]
+    public static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, StringBuilder text, int count);
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GUITHREADINFO
+    {
+        public int cbSize;
+        public int flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public RECT rcCaret;
+    }
 }
 "@
 
@@ -133,6 +155,102 @@ function Find-TextAncestor($element)
         catch { return $null }
     }
     return $null
+}
+
+function Get-UiaTextSnapshot
+{
+    $foreground = [DvhNative]::GetForegroundWindow()
+    if ($foreground -eq [IntPtr]::Zero) { return @() }
+    try
+    {
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle($foreground)
+        if ($null -eq $root) { return @() }
+        $condition = New-Object System.Windows.Automation.OrCondition(
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Edit)),
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Document)))
+        $elements = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        $snapshot = @()
+        foreach ($element in $elements)
+        {
+            if ($snapshot.Count -ge 24) { break }
+            $text = Get-ElementText $element
+            if ($null -ne $text) {
+                $snapshot += [pscustomobject]@{ Element = $element; Text = $text }
+            }
+        }
+        return $snapshot
+    }
+    catch { return @() }
+}
+
+function Get-ForegroundWindowClass
+{
+    try
+    {
+        $foreground = [DvhNative]::GetForegroundWindow()
+        if ($foreground -eq [IntPtr]::Zero) { return '' }
+        $builder = New-Object System.Text.StringBuilder 256
+        [DvhNative]::GetClassName($foreground, $builder, 256) | Out-Null
+        return $builder.ToString()
+    }
+    catch { return '' }
+}
+
+function Copy-FocusedTextViaClipboard
+{
+    $oldClipboard = ''
+    try { $oldClipboard = [System.Windows.Forms.Clipboard]::GetText() } catch { }
+    try
+    {
+        [System.Windows.Forms.SendKeys]::SendWait('^a')
+        Start-Sleep -Milliseconds 60
+        [System.Windows.Forms.SendKeys]::SendWait('^c')
+        Start-Sleep -Milliseconds 140
+        $text = [System.Windows.Forms.Clipboard]::GetText()
+    }
+    catch { $text = $null }
+    try { [System.Windows.Forms.SendKeys]::SendWait('{END}') } catch { }
+    try { if ($null -ne $oldClipboard) { [System.Windows.Forms.Clipboard]::SetText($oldClipboard) } } catch { }
+    return $text
+}
+
+function Read-VoiceTap
+{
+    $tapPath = Join-Path $dataDir 'voice-tap.log'
+    if (-not (Test-Path -LiteralPath $tapPath)) { return }
+    try
+    {
+        $fs = [System.IO.File]::Open($tapPath, 'Open', 'Read', 'ReadWrite')
+        if ($fs.Length -lt $script:tapOffset) { $script:tapOffset = 0 }
+        $fs.Seek($script:tapOffset, 'Begin') | Out-Null
+        $reader = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+        $content = $reader.ReadToEnd()
+        $reader.Dispose()
+        $fs.Dispose()
+        $lastNewline = $content.LastIndexOf("`n")
+        if ($lastNewline -lt 0) { return }
+        $complete = $content.Substring(0, $lastNewline + 1)
+        $script:tapOffset += [System.Text.Encoding]::UTF8.GetByteCount($complete)
+        foreach ($line in ($complete -split "`r?`n"))
+        {
+            if ($line -match '^(GetCommitText|PeekVoiceCommit)\|(.+)$')
+            {
+                $text = $matches[2].Trim()
+                if (-not [string]::IsNullOrWhiteSpace($text))
+                {
+                    Add-HistoryEntry $text | Out-Null
+                    Show-Overlay $text
+                    if ($historyWindow.IsVisible) { Refresh-HistoryView }
+                    Write-Log ("voice tap captured len={0}" -f $text.Length)
+                }
+            }
+        }
+    }
+    catch { }
 }
 
 function Load-History
@@ -582,6 +700,7 @@ $historyXaml = @'
           <Border Height="1" Background="#2AFFFFFF" VerticalAlignment="Top"/>
           <DockPanel Margin="0,14,0,0" LastChildFill="False">
             <CheckBox x:Name="AutoStartCheck" Content="开机启动" Style="{StaticResource FlatCheck}" VerticalAlignment="Center"/>
+            <CheckBox x:Name="AutoUpdateCheck" Content="自动更新" Style="{StaticResource FlatCheck}" VerticalAlignment="Center" Margin="18,0,0,0"/>
             <TextBlock Text="↑↓ 选择 · Enter 复制 · Delete 删除 · Esc 关闭" Foreground="#8F887C"
                        FontSize="10.5" VerticalAlignment="Center" Margin="18,0,0,0"/>
             <TextBlock x:Name="HistoryStatus" DockPanel.Dock="Right" Foreground="#D9BC82" FontSize="11.5"
@@ -630,6 +749,7 @@ $openDirButton = $historyWindow.FindName('OpenDirButton')
 $minButton = $historyWindow.FindName('MinButton')
 $closeHistoryButton = $historyWindow.FindName('CloseHistoryButton')
 $autoStartCheck = $historyWindow.FindName('AutoStartCheck')
+$autoUpdateCheck = $historyWindow.FindName('AutoUpdateCheck')
 $historyStatus = $historyWindow.FindName('HistoryStatus')
 
 $script:currentText = ''
@@ -893,6 +1013,50 @@ function Update-Autostart
     catch { $historyStatus.Text = '设置失败' }
 }
 
+$settingsFile = Join-Path $dataDir 'settings.json'
+
+function Get-AutoUpdateSetting
+{
+    if (Test-Path -LiteralPath $settingsFile)
+    {
+        try
+        {
+            $settings = Get-Content -LiteralPath $settingsFile -Raw | ConvertFrom-Json
+            if ($null -ne $settings.autoUpdate) { return [bool]$settings.autoUpdate }
+        }
+        catch { }
+    }
+    return $true
+}
+
+function Set-AutoUpdateSetting([bool]$enabled)
+{
+    try
+    {
+        @{ autoUpdate = $enabled } | ConvertTo-Json | Set-Content -LiteralPath $settingsFile -Encoding UTF8
+        $taskName = 'DoubaoVoiceHistory-AutoUpdate'
+        $updater = Join-Path (Split-Path $PSCommandPath -Parent) 'Update.ps1'
+        if ($enabled)
+        {
+            schtasks.exe /Query /TN $taskName 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0)
+            {
+                $tr = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$updater`" -Auto"
+                schtasks.exe /Create /SC HOURLY /MO 6 /TN $taskName /TR $tr /F 2>$null | Out-Null
+            }
+            else
+            {
+                schtasks.exe /Change /TN $taskName /ENABLE 2>$null | Out-Null
+            }
+        }
+        else
+        {
+            schtasks.exe /Change /TN $taskName /DISABLE 2>$null | Out-Null
+        }
+    }
+    catch { }
+}
+
 $script:copyTimer = New-Object System.Windows.Threading.DispatcherTimer
 $script:copyTimer.Interval = [TimeSpan]::FromSeconds(1.6)
 $script:copyTimer.Add_Tick({
@@ -956,10 +1120,20 @@ $clearButton.Add_Click({
 $openDirButton.Add_Click({ Start-Process explorer.exe -ArgumentList $dataDir })
 $autoStartCheck.IsChecked = Test-Path -LiteralPath $startupLnk
 $autoStartCheck.Add_Click({ Update-Autostart })
+$autoUpdateCheck.IsChecked = Get-AutoUpdateSetting
+$autoUpdateCheck.Add_Click({
+    $enabled = [bool]$autoUpdateCheck.IsChecked
+    Set-AutoUpdateSetting $enabled
+    $historyStatus.Text = if ($enabled) { '已开启自动更新' } else { '已关闭自动更新' }
+})
 
 $script:pollTimer = New-Object System.Windows.Threading.DispatcherTimer
 $script:pollTimer.Interval = [TimeSpan]::FromMilliseconds(180)
 $script:pollTimer.Add_Tick({
+    if (((Get-Date) - $script:tapReadAt).TotalMilliseconds -ge 250) {
+        $script:tapReadAt = Get-Date
+        Read-VoiceTap
+    }
     $hwnd = [DvhNative]::FindWindow('OimeVoiceWaveWindow', $null)
     $visible = ($hwnd -ne [IntPtr]::Zero) -and [DvhNative]::IsWindowVisible($hwnd)
     if ($visible -and -not $script:voiceVisible)
@@ -972,6 +1146,29 @@ $script:pollTimer.Add_Tick({
             if ($null -eq $candidate) { $candidate = $script:lastFocusElement }
             $script:focusElement = $candidate
             $script:beforeText = Get-ElementText $candidate
+            $foreground = [DvhNative]::GetForegroundWindow()
+            $foregroundPid = 0
+            $threadId = [DvhNative]::GetWindowThreadProcessId($foreground, [ref]$foregroundPid)
+            $gui = New-Object DvhNative+GUITHREADINFO
+            $gui.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf([type][DvhNative+GUITHREADINFO])
+            if ([DvhNative]::GetGUIThreadInfo($threadId, [ref]$gui) -and $gui.hwndFocus -ne [IntPtr]::Zero) {
+                $focusByHwnd = [System.Windows.Automation.AutomationElement]::FromHandle($gui.hwndFocus)
+                if (Test-TextElement $focusByHwnd) {
+                    $script:focusElement = $focusByHwnd
+                    $script:beforeText = Get-ElementText $focusByHwnd
+                }
+            }
+            $script:uiaSnapshot = Get-UiaTextSnapshot
+            $className = New-Object System.Text.StringBuilder 256
+            [DvhNative]::GetClassName($foreground, $className, 256) | Out-Null
+            Write-Log ("foreground=0x{0:X} class={1} snapshot={2}" -f [int64]$foreground, $className.ToString(), @($script:uiaSnapshot).Count)
+            $script:clipboardMode = $false
+            $script:clipboardBefore = $null
+            if ($null -eq $script:beforeText -and $className.ToString() -match 'mmui::MainWindow') {
+                $script:clipboardMode = $true
+                $script:clipboardBefore = Copy-FocusedTextViaClipboard
+                Write-Log ("clipboard fallback before_len={0}" -f $(if ($null -eq $script:clipboardBefore) { -1 } else { $script:clipboardBefore.Length }))
+            }
             Write-Log ("voice start; before_len={0}" -f $(if ($null -eq $script:beforeText) { -1 } else { $script:beforeText.Length }))
         }
         catch { $script:focusElement = $null; $script:beforeText = $null }
@@ -988,13 +1185,40 @@ $script:pollTimer.Add_Tick({
         $script:pendingUntil = $null
         try
         {
-            $afterText = Get-ElementText $script:focusElement
-            if ($null -eq $afterText)
+            $inserted = ''
+            $bestFocused = $false
+            $bestLength = -1
+            foreach ($item in @($script:uiaSnapshot | Where-Object { $_ -and $_.Element }))
             {
-                $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
-                $afterText = Get-ElementText (Find-TextAncestor $focused)
+                $nowText = Get-ElementText $item.Element
+                $diff = Get-InsertedText $item.Text $nowText
+                if ([string]::IsNullOrWhiteSpace($diff) -or $diff.Length -gt 1000) { continue }
+                $isFocused = $false
+                try { $isFocused = [bool]$item.Element.Current.HasKeyboardFocus } catch { }
+                if (($isFocused -and -not $bestFocused) -or
+                    ($isFocused -eq $bestFocused -and $diff.Length -gt $bestLength))
+                {
+                    $inserted = $diff
+                    $bestFocused = $isFocused
+                    $bestLength = $diff.Length
+                }
             }
-            $inserted = Get-InsertedText $script:beforeText $afterText
+            if ([string]::IsNullOrWhiteSpace($inserted))
+            {
+                $afterText = Get-ElementText $script:focusElement
+                if ($null -eq $afterText)
+                {
+                    $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+                    $afterText = Get-ElementText (Find-TextAncestor $focused)
+                }
+                $inserted = Get-InsertedText $script:beforeText $afterText
+            }
+            Write-Log ("voice commit snapshot_candidates={0} inserted_len={1}" -f @($script:uiaSnapshot).Count, $inserted.Length)
+            if ([string]::IsNullOrWhiteSpace($inserted) -and $script:clipboardMode -and (Get-ForegroundWindowClass) -match 'mmui::MainWindow') {
+                $afterClipboard = Copy-FocusedTextViaClipboard
+                $inserted = Get-InsertedText $script:clipboardBefore $afterClipboard
+                Write-Log ("clipboard fallback after_len={0} inserted_len={1}" -f $(if ($null -eq $afterClipboard) { -1 } else { $afterClipboard.Length }), $inserted.Length)
+            }
             $elementName = ''
             try { $elementName = $script:focusElement.Current.Name } catch { }
             if (-not [string]::IsNullOrWhiteSpace($inserted) -and
@@ -1013,13 +1237,24 @@ $script:pollTimer.Add_Tick({
             else { Show-Overlay '' }
         }
         catch { Show-Overlay '' }
-        if ($null -eq $script:pendingUntil) { $script:beforeText = $null; $script:focusElement = $null }
+        if ($null -eq $script:pendingUntil) {
+            $script:beforeText = $null
+            $script:focusElement = $null
+            $script:uiaSnapshot = @()
+            $script:clipboardMode = $false
+            $script:clipboardBefore = $null
+        }
     }
 })
 
 $script:voiceVisible = $false
 $script:pendingUntil = $null
 $script:pendingStage = 0
+$script:uiaSnapshot = @()
+$script:clipboardMode = $false
+$script:clipboardBefore = $null
+$script:tapOffset = 0
+$script:tapReadAt = [datetime]::MinValue
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = New-MicIcon
@@ -1030,6 +1265,7 @@ $menuShow = $menu.Items.Add('显示上次结果')
 $menuHistory = $menu.Items.Add('历史记录')
 $menuFolder = $menu.Items.Add('打开数据目录')
 $menuDoctor = $menu.Items.Add('诊断与修复')
+$menuUpdate = $menu.Items.Add('检查更新')
 $menuExit = $menu.Items.Add('退出')
 $tray.ContextMenuStrip = $menu
 $menuShow.Add_Click({ if ($script:history.Count -gt 0) { Show-Overlay $script:history[0].text } })
@@ -1039,6 +1275,12 @@ $menuDoctor.Add_Click({
     $doctor = Join-Path (Split-Path $PSCommandPath -Parent) 'Doctor.ps1'
     if (Test-Path $doctor) {
         Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',$doctor,'-Fix'
+    }
+})
+$menuUpdate.Add_Click({
+    $updater = Join-Path (Split-Path $PSCommandPath -Parent) 'Update.ps1'
+    if (Test-Path $updater) {
+        Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',$updater
     }
 })
 $menuExit.Add_Click({ $tray.Visible = $false; $app.Shutdown() })
