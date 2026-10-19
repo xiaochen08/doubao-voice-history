@@ -203,5 +203,5 @@ Write-Host "`n安装完成。" -ForegroundColor Green
 Write-Host "  程序目录：$appDir"
 Write-Host "  数据目录：$dataDir"
 Write-Host "  诊断修复：$doctorScript -Fix"
-Write-Host "  卸载：$PSScriptRoot\Uninstall.ps1"
+Write-Host "  卸载：$appDir\Uninstall.ps1"
 if (-not $Silent) { Write-Host "`n按 Enter 退出..." -ForegroundColor DarkGray; Read-Host | Out-Null }
