@@ -307,6 +307,7 @@ function Read-VoiceTap
                 $text = $matches[1].Trim()
                 if (Test-VoiceText $text)
                 {
+                    $script:tapText = $text
                     Add-HistoryEntry $text | Out-Null
                     Show-Overlay $text
                     if ($historyWindow.IsVisible) { Refresh-HistoryView }
@@ -1310,6 +1311,7 @@ $script:pollTimer.Add_Tick({
             Write-Log ("foreground=0x{0:X} class={1} snapshot={2}" -f [int64]$foreground, $className.ToString(), @($script:uiaSnapshot).Count)
             $script:clipboardMode = $false
             $script:clipboardBefore = $null
+            $script:tapText = ''
             if ($null -eq $script:beforeText -and $className.ToString() -match 'mmui::MainWindow') {
                 $script:clipboardMode = $true
                 $script:clipboardBefore = Copy-FocusedTextViaClipboard
@@ -1385,7 +1387,14 @@ $script:pollTimer.Add_Tick({
                 $script:pendingStage++
                 $script:pendingUntil = (Get-Date).AddMilliseconds($(if ($script:pendingStage -eq 1) { 600 } else { 1200 }))
             }
-            else { Show-Overlay '' }
+            else {
+                if (Test-VoiceText $script:tapText) {
+                    Set-ClipboardText $script:tapText
+                    Show-Overlay $script:tapText
+                    $statusText.Text = '输入法未插入，已复制到剪贴板'
+                    Write-Log 'IME_DROPPED rescued from tap'
+                } else { Show-Overlay '' }
+            }
         }
         catch { Show-Overlay '' }
         if ($null -eq $script:pendingUntil) {
@@ -1405,6 +1414,7 @@ $script:uiaSnapshot = @()
 $script:clipboardMode = $false
 $script:clipboardBefore = $null
 $script:tapOffset = 0
+$script:tapText = ''
 $script:tapReadAt = [datetime]::MinValue
 $script:lastTargetPid = 0
 $script:lastTargetName = ''
