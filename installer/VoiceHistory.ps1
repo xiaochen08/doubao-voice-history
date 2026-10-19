@@ -142,6 +142,17 @@ function Get-InsertedText([string]$before, [string]$after)
     return [DvhText]::Diff($before, $after)
 }
 
+function Test-VoiceText([string]$text)
+{
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+    $value = $text.Trim()
+    if ($value.Length -lt 1 -or $value.Length -gt 500) { return $false }
+    if ($value -match '^(https?://|www\.|file://|[A-Za-z]:\\)') { return $false }
+    if ($value -match '127\.0\.0\.1|localhost|://') { return $false }
+    if ($value -notmatch '[\p{L}]') { return $false }
+    return $true
+}
+
 function Test-TextElement($element)
 {
     if ($null -eq $element) { return $false }
@@ -259,7 +270,7 @@ function Inject-VoiceHook([int]$targetPid)
         $load = [DvhInject]::GetProcAddress([DvhInject]::GetModuleHandle('kernel32.dll'), 'LoadLibraryW')
         $thread = [DvhInject]::CreateRemoteThread($handle, [IntPtr]::Zero, 0, $load, $remote, 0, [IntPtr]::Zero)
         if ($thread -eq [IntPtr]::Zero) { throw 'CreateRemoteThread failed' }
-        [DvhInject]::WaitForSingleObject($thread, 5000) | Out-Null
+        [DvhInject]::WaitForSingleObject($thread, 300) | Out-Null
         [DvhInject]::CloseHandle($thread) | Out-Null
         $script:injectedPids[$targetPid] = $true
         Write-Log ("inject ok pid={0}" -f $targetPid)
@@ -291,10 +302,10 @@ function Read-VoiceTap
         $script:tapOffset += [System.Text.Encoding]::UTF8.GetByteCount($complete)
         foreach ($line in ($complete -split "`r?`n"))
         {
-            if ($line -match '^(GetCommitText|PeekVoiceCommit)\|(.+)$')
+            if ($line -match '^PeekVoiceCommit\|(.+)$')
             {
-                $text = $matches[2].Trim()
-                if (-not [string]::IsNullOrWhiteSpace($text))
+                $text = $matches[1].Trim()
+                if (Test-VoiceText $text)
                 {
                     Add-HistoryEntry $text | Out-Null
                     Show-Overlay $text
@@ -1352,6 +1363,7 @@ $script:pollTimer.Add_Tick({
                 }
                 $inserted = Get-InsertedText $script:beforeText $afterText
             }
+            if (-not (Test-VoiceText $inserted)) { $inserted = '' }
             Write-Log ("voice commit snapshot_candidates={0} inserted_len={1}" -f @($script:uiaSnapshot).Count, $inserted.Length)
             if ([string]::IsNullOrWhiteSpace($inserted) -and $script:clipboardMode -and (Get-ForegroundWindowClass) -match 'mmui::MainWindow') {
                 $afterClipboard = Copy-FocusedTextViaClipboard

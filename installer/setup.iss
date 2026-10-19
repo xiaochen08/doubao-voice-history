@@ -1,5 +1,5 @@
 #define MyAppName "豆包语音历史"
-#define MyAppVersion "2.4.0"
+#define MyAppVersion "2.4.1"
 #define MyAppPublisher "xiaochen08"
 #define MyAppURL "https://github.com/xiaochen08/doubao-voice-history"
 
