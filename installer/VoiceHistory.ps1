@@ -1566,6 +1566,13 @@ $script:uiaSnapshot = @()
 $script:clipboardMode = $false
 $script:clipboardBefore = $null
 $script:tapOffset = 0
+try {
+    $tapStartPath = Join-Path $dataDir 'voice-tap.log'
+    if (Test-Path -LiteralPath $tapStartPath) {
+        $script:tapOffset = (Get-Item -LiteralPath $tapStartPath).Length
+        Write-Log ("voice tap start offset={0}" -f $script:tapOffset)
+    }
+} catch { }
 $script:tapText = ''
 $script:lastTapText = ''
 $script:lastTapAt = [datetime]::MinValue
