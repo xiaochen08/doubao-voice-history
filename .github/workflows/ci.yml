@@ -1,0 +1,20 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  parse:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell
+        shell: pwsh
+        run: |
+          $bad = 0
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $t = $null; $e = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$t, [ref]$e) | Out-Null
+            if ($e.Count) {
+              $bad++
+              Write-Host "::error file=$($_.FullName)::$($e[0].Message)"
+            }
+          }
+          if ($bad) { exit 1 }

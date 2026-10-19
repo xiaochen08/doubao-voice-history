@@ -1,0 +1,8 @@
+*.zip
+*.log
+history.json
+history.corrupt-*.json
+app.backup-*/
+backup/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,25 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zip = "DoubaoVoiceHistory-Setup-$tag.zip"
+          Compress-Archive -Path installer/* -DestinationPath $zip -Force
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          "$hash  $zip" | Set-Content SHA256SUMS.txt -Encoding ASCII
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            DoubaoVoiceHistory-Setup-*.zip
+            SHA256SUMS.txt
+          generate_release_notes: true
