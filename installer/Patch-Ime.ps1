@@ -54,6 +54,9 @@ if ($Rollback) {
     } else {
         throw '找不到原始版本目录，无法回滚。'
     }
+    if ((Split-Path $rollbackDir -Leaf) -match '-(mod|voicefix|keyguard)$' -and (Test-Path $originalDir)) {
+        $rollbackDir = $originalDir
+    }
     if (-not (Test-Path $rollbackDir) -and (Test-Path $originalDir)) {
         $rollbackDir = $originalDir
     }
@@ -130,11 +133,8 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path (Split-Path $backupFile -Parent) | Out-Null
-    if ($leaf -ne 'v0.9.2.7-keyguard' -or -not (Test-Path $backupFile)) {
-        $rollbackTarget = if (Test-Path $originalDir) { $originalDir } else { $versionDir }
-        [pscustomobject]@{ VersionDir = $rollbackTarget; SavedAt = (Get-Date).ToString('o') } |
-            ConvertTo-Json | Set-Content -LiteralPath $backupFile -Encoding UTF8
-    }
+    [pscustomobject]@{ VersionDir = $originalDir; SavedAt = (Get-Date).ToString('o') } |
+        ConvertTo-Json | Set-Content -LiteralPath $backupFile -Encoding UTF8
     Set-ItemProperty 'HKLM:\SOFTWARE\DoubaoIme' -Name VersionDir -Value $guardDir
 }
 finally {
