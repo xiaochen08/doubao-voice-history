@@ -168,15 +168,15 @@ try {
 } catch { Warn "屏幕抓取不可用：$($_.Exception.Message)" }
 
 Head 'IME 补丁状态'
-if ($imeVersionDir -and (Split-Path $imeVersionDir -Leaf) -match 'mod$') {
+if ($imeVersionDir -and (Split-Path $imeVersionDir -Leaf) -match 'keyguard$') {
     $core = Join-Path $imeVersionDir 'tsf-oime-core.dll'
     if (Test-Path $core) {
         $b = [System.IO.File]::ReadAllBytes($core)
-        $patched = ($b[0x161FA] -eq 0x83 -and $b[0x161FB] -eq 0xFE -and $b[0x161FC] -eq 0x1B)
-        if ($patched) { Pass '按键不打断录音补丁已生效' } else { Warn 'mod 目录存在但字节未匹配补丁' }
+        $patched = ($b[0x2CDA0] -eq 0x41 -and $b[0x2CDA1] -eq 0x81 -and $b[0x2CDA2] -eq 0xF8 -and $b[0x2CDA3] -eq 0xA5)
+        if ($patched) { Pass '仅启动键（右 Alt）打断语音补丁已生效' } else { Warn 'keyguard 目录存在但字节未匹配补丁' }
     }
 } else {
-    Warn '未启用 IME 补丁（历史浮条不受影响）'
+    Warn '未启用“仅启动键打断语音”补丁（历史浮条不受影响）'
 }
 
 Add-Line ''

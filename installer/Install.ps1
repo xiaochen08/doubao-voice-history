@@ -191,20 +191,22 @@ try {
     Ok '屏幕抓取可用（毛玻璃背景）'
 } catch { Warn "屏幕抓取不可用：$($_.Exception.Message)" }
 
-Step '可选：修复“按键打断语音”'
+Step '可选：录音中仅启动键（右 Alt）打断语音'
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
-$imeLeaf = if ($imeVersionDir) { (Split-Path $imeVersionDir -Leaf) -replace '-mod$','' } else { '' }
-$alreadyPatched = $imeVersionDir -and ((Split-Path $imeVersionDir -Leaf) -match '-mod$')
+$currentImeLeaf = if ($imeVersionDir) { Split-Path $imeVersionDir -Leaf } else { '' }
+$imeLeaf = $currentImeLeaf -replace '-(mod|voicefix|keyguard)$',''
+$alreadyPatched = $currentImeLeaf -match '-keyguard$'
+$wasPatched = $currentImeLeaf -match '-(mod|voicefix)$'
 $canPatch = $imeLeaf -eq 'v0.9.2.7'
 if ($alreadyPatched) {
-    Ok '按键不打断录音补丁已生效，跳过'
+    Ok '仅启动键（右 Alt）打断语音补丁已生效，跳过'
 } elseif (-not $canPatch) {
     Warn "当前豆包版本 $imeLeaf 不支持自动补丁，跳过（历史浮条不受影响）"
-} elseif (-not $ApplyImePatch -and $Silent) {
+} elseif (-not $ApplyImePatch -and $Silent -and -not $wasPatched) {
     Warn '静默安装未指定 -ApplyImePatch，跳过'
 } else {
-    $answer = if ($ApplyImePatch) { 'Y' } else { Read-Host '是否同时应用 IME 补丁？需要管理员权限 (Y/N)' }
+    $answer = if ($ApplyImePatch -or ($Silent -and $wasPatched)) { 'Y' } else { Read-Host '是否启用“录音中仅启动键打断”？需要管理员权限 (Y/N)' }
     if ($answer -match '^[Yy]') {
         $patchScript = Join-Path $appDir 'Patch-Ime.ps1'
         if (Test-Path $patchScript) {

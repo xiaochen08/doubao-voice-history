@@ -8,6 +8,7 @@ This is a standalone companion app. It does not modify the Doubao IME UI.
 - Shows a floating card above the voice bar: click the text or 复制 to copy.
 - Keeps the last 500 sessions in `%APPDATA%\DoubaoVoiceHistory\history.json`.
 - Merges identical recognition results captured within 10 minutes and shows a `×N` repeat count.
+- Optional IME guard: only the configured start key (Right Alt) stops an active voice recording.
 - Tray icon: 历史记录 / 退出.
 
 Run:
